@@ -1,0 +1,4 @@
+Model,MAE,RMSE,R2 Score
+Linear Regression,261069.51,724250.3,0.821
+Random Forest,170550.5,660116.14,0.8513
+CatBoost,177675.62,585741.51,0.8829
