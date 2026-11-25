@@ -3,25 +3,27 @@ import joblib
 import pandas as pd
 from pathlib import Path
 
-# Locate the saved model
 BASE_DIR = Path(__file__).resolve().parents[2]
-MODEL_PATH = BASE_DIR / "models" / "car_price_pipeline.joblib"
+MODEL_PATH = BASE_DIR / "models" / "carwise_random_forest.joblib"
 
-# Load model once
 model = joblib.load(MODEL_PATH)
+
+# Dataset listings are primarily from 2024
+REFERENCE_YEAR = 2024
 
 
 def predict_car_price(car_details):
-    """
-    Predict used car selling price.
 
-    car_details must contain:
-    name, year, km_driven, fuel, seller_type,
-    transmission, owner, mileage, engine,
-    max_power, seats
-    """
-
-    input_data = pd.DataFrame([car_details])
+    input_data = pd.DataFrame([{
+        "Brand": car_details["Brand"],
+        "model": car_details["model"],
+        "Year": car_details["Year"],
+        "CarAge": REFERENCE_YEAR - car_details["Year"],
+        "kmDriven": car_details["kmDriven"],
+        "Transmission": car_details["Transmission"],
+        "Owner": car_details["Owner"],
+        "FuelType": car_details["FuelType"]
+    }])
 
     prediction = model.predict(input_data)[0]
 

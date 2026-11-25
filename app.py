@@ -1,7 +1,9 @@
 
 import streamlit as st
 import pandas as pd
+import streamlit.components.v1 as components
 from PIL import Image
+from pathlib import Path
 
 from src.damage_detection.detect_damage import detect_damage
 
@@ -23,6 +25,42 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+BASE_DIR = Path(__file__).resolve().parent
+DATASET_PATH = BASE_DIR / "dataset" / "used_cars_dataset_v2.csv"
+
+
+# ------------------------------------------------
+# LOAD DATASET OPTIONS
+# ------------------------------------------------
+
+@st.cache_data
+def load_car_options():
+    data = pd.read_csv(DATASET_PATH)
+
+    brands = sorted(data["Brand"].dropna().astype(str).unique())
+
+    fuel_types = sorted(
+        data["FuelType"].dropna().astype(str).unique()
+    )
+
+    transmissions = sorted(
+        data["Transmission"].dropna().astype(str).unique()
+    )
+
+    owners = sorted(
+        data["Owner"].dropna().astype(str).unique()
+    )
+
+    return data, brands, fuel_types, transmissions, owners
+
+
+try:
+    car_data, brands, fuel_types, transmissions, owners = load_car_options()
+    DATA_OPTIONS_AVAILABLE = True
+except Exception as e:
+    DATA_OPTIONS_AVAILABLE = False
+    print("Dataset options error:", e)
 
 
 # ------------------------------------------------
@@ -221,15 +259,105 @@ footer {
 """, unsafe_allow_html=True)
 
 
+
 # ------------------------------------------------
 # SESSION STATE
 # ------------------------------------------------
 
-if "damage_results" not in st.session_state:
-    st.session_state.damage_results = []
+DEFAULT_STATE = {
+    "workflow_step": 1,
+    "damage_results": [],
+    "base_price": None,
+    "car_details": None,
+    "damage_analysis_done": False,
+    "exterior_repair_cost_input": 0.0,
+    "condition_ratings": {}
+}
 
-if "base_price" not in st.session_state:
-    st.session_state.base_price = None
+for key, value in DEFAULT_STATE.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+
+
+# ------------------------------------------------
+# VALUATION ESTIMATION RULES
+# ------------------------------------------------
+
+# Illustrative repair estimates in INR per detected box.
+# These are editable estimates, not verified repair quotations.
+DAMAGE_REPAIR_ESTIMATES = {
+    "dent": 8000,
+    "scratch": 3000,
+    "crack": 7000,
+    "broken_light": 5000,
+    "broken_glass": 12000
+}
+
+DEFAULT_DAMAGE_REPAIR_ESTIMATE = 5000
+
+# Prototype condition adjustments.
+# These are heuristic percentages of the base predicted price.
+CONDITION_ADJUSTMENTS = {
+    "Engine": {
+        "Good": 0.00,
+        "Average": 0.03,
+        "Poor": 0.08
+    },
+    "Transmission": {
+        "Good": 0.00,
+        "Average": 0.02,
+        "Poor": 0.05
+    },
+    "Brakes": {
+        "Good": 0.00,
+        "Average": 0.01,
+        "Poor": 0.02
+    },
+    "Tyres": {
+        "Good": 0.00,
+        "Average": 0.01,
+        "Poor": 0.02
+    }
+}
+
+
+def estimate_exterior_repair_cost(damage_counts):
+    total = 0
+
+    for damage_type, count in damage_counts.items():
+        damage_key = str(damage_type).lower().replace(" ", "_")
+
+        rate = DAMAGE_REPAIR_ESTIMATES.get(
+            damage_key,
+            DEFAULT_DAMAGE_REPAIR_ESTIMATE
+        )
+
+        total += rate * int(count)
+
+    return total
+
+
+def calculate_mechanical_deduction(base_price, ratings):
+    breakdown = {}
+
+    for component, condition in ratings.items():
+        percentage = CONDITION_ADJUSTMENTS[component][condition]
+        deduction = base_price * percentage
+
+        breakdown[component] = {
+            "condition": condition,
+            "percentage": percentage * 100,
+            "deduction": deduction
+        }
+
+    total = sum(
+        item["deduction"] for item in breakdown.values()
+    )
+
+    return total, breakdown
+
 
 
 # ------------------------------------------------
@@ -248,421 +376,601 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ------------------------------------------------
-# NAVIGATION TABS
-# ------------------------------------------------
 
-price_tab, damage_tab, report_tab = st.tabs([
-    "💰  Price Estimator",
-    "🔍  Damage Inspection",
-    "📊  Final Valuation"
-])
+# =================================================
+# CARWISE AI - STEP-BY-STEP VALUATION WIZARD
+# =================================================
+
+st.markdown(
+    '<div class="section-heading">Complete Vehicle Valuation</div>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<div class="section-subtitle">'
+    'Follow the steps to generate your vehicle condition report.'
+    '</div>',
+    unsafe_allow_html=True
+)
+
+# Automatically scroll to the top when navigating between steps
+if st.session_state.get("scroll_to_top", False):
+    st.markdown(
+        """
+        <script>
+            window.parent.document.querySelector(
+                'section.main'
+            ).scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+        </script>
+        """,
+        unsafe_allow_html=True
+    )
+    st.session_state.scroll_to_top = False
+
+step = st.session_state.workflow_step
+
+# Scroll to top after navigating to another step
+if st.session_state.get("scroll_to_top", False):
+
+    components.html(
+        """
+        <script>
+            function scrollPageToTop() {
+                try {
+                    const parentWindow = window.parent;
+                    const parentDocument = parentWindow.document;
+
+                    // Scroll the browser window
+                    parentWindow.scrollTo({
+                        top: 0,
+                        behavior: "smooth"
+                    });
+
+                    // Scroll Streamlit's main content container
+                    const main = parentDocument.querySelector("section.main");
+
+                    if (main) {
+                        main.scrollTo({
+                            top: 0,
+                            behavior: "smooth"
+                        });
+                    }
+
+                    const appView = parentDocument.querySelector(
+                        '[data-testid="stAppViewContainer"]'
+                    );
+
+                    if (appView) {
+                        appView.scrollTo({
+                            top: 0,
+                            behavior: "smooth"
+                        });
+                    }
+
+                } catch (error) {
+                    console.error("Scroll error:", error);
+                }
+            }
+
+            setTimeout(scrollPageToTop, 150);
+        </script>
+        """,
+        height=0
+    )
+
+    st.session_state.scroll_to_top = False
+
+step_names = [
+    "Vehicle Details",
+    "Exterior Inspection",
+    "Mechanical Condition",
+    "Final Valuation"
+]
+
+st.progress(step / 4)
+st.caption(f"Step {step} of 4 — {step_names[step - 1]}")
 
 
 # =================================================
-# TAB 1: PRICE PREDICTION
+# STEP 1: VEHICLE DETAILS
 # =================================================
 
-with price_tab:
+if step == 1:
 
-    st.markdown(
-        '<div class="section-heading">Used Car Price Estimator</div>',
-        unsafe_allow_html=True
-    )
+    st.markdown("### 🚘 Step 1: Vehicle Information")
 
-    st.markdown(
-        '<div class="section-subtitle">'
-        'Enter your vehicle specifications to estimate its resale value.'
-        '</div>',
-        unsafe_allow_html=True
-    )
+    if not DATA_OPTIONS_AVAILABLE:
+        st.error("Could not load the vehicle dataset.")
 
-    with st.form("car_details_form"):
+    elif not PRICE_MODEL_AVAILABLE:
+        st.error("Price prediction model is unavailable.")
 
+    else:
         col1, col2 = st.columns(2)
 
         with col1:
+            st.markdown("#### Vehicle Information")
 
-            st.markdown("##### 🚗 Vehicle Information")
-
-            car_name = st.text_input(
-                "Car Name",
-                placeholder="e.g. Maruti Swift Dzire VDI"
+            brand = st.selectbox(
+                "Manufacturer",
+                brands,
+                key="wizard_brand"
             )
+
+            available_models = sorted(
+                car_data.loc[
+                    car_data["Brand"].astype(str).str.strip().str.casefold()
+                    == brand.strip().casefold(),
+                    "model"
+                ].dropna().astype(str).str.strip().unique()
+            )
+
+            if available_models:
+                car_model = st.selectbox(
+                    "Car Model",
+                    available_models,
+                    key=f"wizard_model_{brand}"
+                )
+            else:
+                car_model = None
+                st.warning("No models available for this manufacturer.")
 
             year = st.number_input(
                 "Manufacturing Year",
                 min_value=1990,
-                max_value=2026,
-                value=2018
+                max_value=2024,
+                value=2018,
+                step=1,
+                key="wizard_year"
             )
 
             km_driven = st.number_input(
                 "Kilometres Driven",
                 min_value=0,
-                value=45000
+                value=45000,
+                step=1000,
+                key="wizard_km"
             )
+
+        with col2:
+            st.markdown("#### Vehicle Specifications")
 
             fuel = st.selectbox(
                 "Fuel Type",
-                ["Diesel", "Petrol", "LPG", "CNG"]
+                fuel_types,
+                key="wizard_fuel"
             )
 
             transmission = st.selectbox(
                 "Transmission",
-                ["Manual", "Automatic"]
+                transmissions,
+                key="wizard_transmission"
             )
-
-            seller_type = st.selectbox(
-                "Seller Type",
-                ["Individual", "Dealer", "Trustmark Dealer"]
-            )
-
-        with col2:
-
-            st.markdown("##### ⚙️ Technical Specifications")
 
             owner = st.selectbox(
                 "Previous Owners",
-                [
-                    "First Owner",
-                    "Second Owner",
-                    "Third Owner",
-                    "Fourth & Above Owner",
-                    "Test Drive Car"
-                ]
+                owners,
+                key="wizard_owner"
             )
 
-            mileage = st.number_input(
-                "Mileage (kmpl)",
-                min_value=0.0,
-                value=18.0,
-                step=0.1
-            )
-
-            engine = st.number_input(
-                "Engine Capacity (CC)",
-                min_value=0,
-                value=1197
-            )
-
-            max_power = st.number_input(
-                "Maximum Power (bhp)",
-                min_value=0.0,
-                value=82.0,
-                step=0.1
-            )
-
-            seats = st.selectbox(
-                "Number of Seats",
-                [2, 4, 5, 6, 7, 8, 9, 10, 14]
-            )
-
-        submitted = st.form_submit_button(
-            "✨  Calculate Estimated Price",
-            use_container_width=True
-        )
-
-    if submitted:
-
-        if not car_name.strip():
-            st.warning("Please enter the car name.")
-
-        elif not PRICE_MODEL_AVAILABLE:
-            st.error("Price prediction model is unavailable.")
-
-        else:
+        if st.button(
+            "Continue to Exterior Inspection →",
+            use_container_width=True,
+            disabled=not car_model
+        ):
 
             car_details = {
-                "name": car_name.strip(),
-                "year": year,
-                "km_driven": km_driven,
-                "fuel": fuel,
-                "seller_type": seller_type,
-                "transmission": transmission,
-                "owner": owner,
-                "mileage": mileage,
-                "engine": engine,
-                "max_power": max_power,
-                "seats": seats
+                "Brand": brand,
+                "model": car_model,
+                "Year": int(year),
+                "kmDriven": int(km_driven),
+                "Transmission": transmission,
+                "Owner": owner,
+                "FuelType": fuel
             }
 
             try:
+                with st.spinner("Estimating the base vehicle price..."):
+                    base_price = predict_car_price(car_details)
 
-                predicted_price = predict_car_price(car_details)
+                st.session_state.car_details = car_details
+                st.session_state.base_price = base_price
 
-                st.session_state.base_price = predicted_price
+                # Reset previous inspection data for this new valuation
+                st.session_state.damage_results = []
+                st.session_state.damage_analysis_done = False
+                st.session_state.exterior_repair_cost_input = 0.0
+                st.session_state.condition_ratings = {}
 
-                st.success("Vehicle valuation generated successfully!")
+                st.session_state.workflow_step = 2
+                st.session_state.scroll_to_top = True
+                st.rerun()
 
             except Exception as e:
-                st.error(f"Prediction error: {e}")
+                st.error(f"Price prediction error: {e}")
 
-    if st.session_state.base_price is not None:
 
-        st.markdown(
-            f"""
-            <div class="price-card">
-                <div class="price-label">
-                    YOUR AI-BASED INDICATIVE MARKET VALUATION
-                </div>
-                <div class="price-value">
-                    ₹{st.session_state.base_price:,.0f}
-                </div>
-                <div class="price-note">
-                    Based on historical used-car listing data.
-                    Actual selling prices may vary.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
+# =================================================
+# STEP 2: EXTERIOR DAMAGE INSPECTION
+# =================================================
+
+elif step == 2:
+
+    st.markdown("### 🔍 Step 2: Exterior Condition")
+
+    st.info(
+        f"Your base vehicle estimate is ₹{st.session_state.base_price:,.0f}. "
+        "Now let's inspect its exterior condition."
+    )
+
+    inspection_choice = st.radio(
+        "How would you like to proceed?",
+        [
+            "Upload photos for damage inspection",
+            "No visible damage — car is in good condition"
+        ],
+        key="inspection_choice"
+    )
+
+    if inspection_choice == "No visible damage — car is in good condition":
+
+        st.session_state.damage_results = []
+        st.session_state.damage_analysis_done = True
+        st.session_state.exterior_repair_cost_input = 0.0
+
+        st.success("No exterior damage has been reported.")
+
+    else:
+
+        uploaded_images = st.file_uploader(
+            "Upload clear photographs of your vehicle",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key="wizard_damage_upload"
         )
 
         st.caption(
-            "Note: This is an indicative estimate, not a guaranteed "
-            "current market or transaction price."
+            "Upload images showing scratches, dents, broken lights "
+            "or other visible exterior damage."
         )
 
+        if uploaded_images:
 
-# =================================================
-# TAB 2: DAMAGE DETECTION
-# =================================================
+            if st.button(
+                "Analyze Vehicle Damage",
+                use_container_width=True
+            ):
 
-with damage_tab:
+                all_results = []
+                progress = st.progress(0)
 
-    st.markdown(
-        '<div class="section-heading">Vehicle Damage Inspection</div>',
-        unsafe_allow_html=True
-    )
+                for index, uploaded_file in enumerate(uploaded_images):
 
-    st.markdown(
-        '<div class="section-subtitle">'
-        'Upload vehicle photographs to identify visible exterior damage.'
-        '</div>',
-        unsafe_allow_html=True
-    )
+                    try:
+                        image = Image.open(uploaded_file).convert("RGB")
 
-    uploaded_images = st.file_uploader(
-        "Upload vehicle photographs",
-        type=["jpg", "jpeg", "png"],
-        accept_multiple_files=True,
-        key="damage_upload"
-    )
+                        result = detect_damage(image)
 
-    if uploaded_images:
+                        all_results.append({
+                            "filename": uploaded_file.name,
+                            "original_image": image,
+                            "annotated_image": result["annotated_image"],
+                            "detections": result["detections"],
+                            "damage_counts": result["damage_counts"],
+                            "total_damages": result["total_damages"]
+                        })
 
-        st.caption(f"{len(uploaded_images)} image(s) selected.")
+                    except Exception as e:
+                        st.error(
+                            f"Could not process {uploaded_file.name}: {e}"
+                        )
 
-    if st.button(
-        "🔍  Analyze Vehicle Damage",
-        disabled=not uploaded_images,
-        use_container_width=True
-    ):
+                    progress.progress(
+                        (index + 1) / len(uploaded_images)
+                    )
 
-        all_results = []
+                st.session_state.damage_results = all_results
+                st.session_state.damage_analysis_done = bool(all_results)
 
-        progress = st.progress(0)
+                combined_counts = {}
 
-        for index, uploaded_file in enumerate(uploaded_images):
+                for result in all_results:
+                    for damage, count in result["damage_counts"].items():
+                        combined_counts[damage] = (
+                            combined_counts.get(damage, 0) + count
+                        )
 
-            image = Image.open(uploaded_file).convert("RGB")
-
-            try:
-
-                result = detect_damage(image)
-
-                all_results.append({
-                    "filename": uploaded_file.name,
-                    "original_image": image,
-                    "annotated_image": result["annotated_image"],
-                    "detections": result["detections"],
-                    "damage_counts": result["damage_counts"],
-                    "total_damages": result["total_damages"]
-                })
-
-            except Exception as e:
-                st.error(
-                    f"Error processing {uploaded_file.name}: {e}"
+                suggested_cost = estimate_exterior_repair_cost(
+                    combined_counts
                 )
 
-            progress.progress((index + 1) / len(uploaded_images))
+                st.session_state.exterior_repair_cost_input = suggested_cost
 
-        st.session_state.damage_results = all_results
+                if all_results:
+                    st.success("Exterior inspection completed!")
 
-        st.success("Damage inspection completed!")
+        if st.session_state.damage_results:
 
-    if st.session_state.damage_results:
+            st.markdown("#### Inspection Results")
 
-        st.markdown("### Inspection Results")
+            for result in st.session_state.damage_results:
 
-        for result in st.session_state.damage_results:
+                with st.expander(result["filename"], expanded=True):
 
-            with st.expander(result["filename"], expanded=True):
+                    col1, col2 = st.columns(2)
 
-                col1, col2 = st.columns(2)
+                    with col1:
+                        st.image(
+                            result["original_image"],
+                            caption="Original Image",
+                            use_container_width=True
+                        )
 
-                with col1:
-                    st.image(
-                        result["original_image"],
-                        caption="Original Image",
-                        use_container_width=True
-                    )
+                    with col2:
+                        st.image(
+                            result["annotated_image"],
+                            caption="Detected Damage",
+                            use_container_width=True
+                        )
 
-                with col2:
-                    st.image(
-                        result["annotated_image"],
-                        caption="Detected Damage",
-                        use_container_width=True
-                    )
+                    st.write("Detected damage:", result["damage_counts"])
 
-                st.markdown("#### Damage Details")
+    col1, col2 = st.columns(2)
 
-                if result["detections"]:
+    with col1:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.workflow_step = 1
+            st.session_state.scroll_to_top = True
+            st.rerun()
 
-                    damage_df = pd.DataFrame([
-                        {
-                            "Damage": item["damage"],
-                            "Confidence (%)": item["confidence"],
-                            "Bounding Box": item["bounding_box"]
-                        }
-                        for item in result["detections"]
-                    ])
-
-                    st.dataframe(
-                        damage_df,
-                        use_container_width=True
-                    )
-
-                    st.json(result["damage_counts"])
-
-                else:
-                    st.info(
-                        "No damage detected above the selected "
-                        "confidence threshold."
-                    )
+    with col2:
+        if st.button(
+            "Continue to Mechanical Condition →",
+            use_container_width=True,
+            disabled=not st.session_state.damage_analysis_done
+        ):
+            st.session_state.workflow_step = 3
+            st.session_state.scroll_to_top = True
+            st.rerun()
 
 
 # =================================================
-# TAB 3: FINAL CONDITION REPORT
+# STEP 3: MECHANICAL CONDITION
 # =================================================
 
-with report_tab:
+elif step == 3:
 
-    st.markdown(
-        '<div class="section-heading">Final Vehicle Valuation</div>',
-        unsafe_allow_html=True
+    st.markdown("### ⚙️ Step 3: Mechanical Condition")
+
+    st.write(
+        "Select the condition of each component based on your "
+        "inspection or the information provided by the vehicle owner."
     )
 
-    st.markdown(
-        '<div class="section-subtitle">'
-        'Review the estimated resale value and visible damage findings.'
-        '</div>',
-        unsafe_allow_html=True
+    st.warning(
+        "These are user-reported conditions. CarWise AI does not "
+        "mechanically diagnose the engine, gearbox, brakes or tyres."
     )
 
-    if st.session_state.base_price is not None:
+    st.markdown("#### Exterior Repair Estimate")
 
-        st.metric(
-            "AI-Based Base Resale Estimate",
-            f"₹{st.session_state.base_price:,.0f}"
-        )
+    damage_counts = {}
 
+    for result in st.session_state.damage_results:
+        for damage, count in result["damage_counts"].items():
+            damage_counts[damage] = (
+                damage_counts.get(damage, 0) + count
+            )
+
+    if damage_counts:
+        st.write("Detected damage:", damage_counts)
     else:
+        st.success("No visible exterior damage reported.")
 
-        st.info(
-            "Generate a car price prediction first to view the valuation."
-        )
-
-    if st.session_state.damage_results:
-
-        total_damages = sum(
-            result["total_damages"]
-            for result in st.session_state.damage_results
-        )
-
-        combined_counts = {}
-
-        for result in st.session_state.damage_results:
-
-            for damage, count in result["damage_counts"].items():
-
-                combined_counts[damage] = (
-                    combined_counts.get(damage, 0) + count
-                )
-
-        col1, col2 = st.columns(2)
-
-        col1.metric(
-            "Images Analyzed",
-            len(st.session_state.damage_results)
-        )
-
-        col2.metric(
-            "Total Damage Detections",
-            total_damages
-        )
-
-        st.markdown("### Damage Summary")
-
-        st.json(combined_counts)
-
-        st.markdown("### Repair Cost Adjustment")
-
-        repair_cost = st.number_input(
-            "Estimated Repair Cost (₹)",
-            min_value=0.0,
-            value=0.0,
-            key="repair_cost"
-        )
-
-        if st.session_state.base_price is not None:
-
-            base_price = float(st.session_state.base_price)
-
-            adjusted_price = max(0, base_price - repair_cost)
-
-            col1, col2 = st.columns(2)
-
-            col1.metric(
-                "Base Resale Estimate",
-                f"₹{base_price:,.0f}"
-            )
-
-            col2.metric(
-                "Estimated Repair Cost",
-                f"₹{repair_cost:,.0f}"
-            )
-
-            st.markdown(
-                f"""
-                <div class="price-card">
-                    <div class="price-label">
-                        ADJUSTED INDICATIVE VALUATION
-                    </div>
-                    <div class="price-value">
-                        ₹{adjusted_price:,.0f}
-                    </div>
-                    <div class="price-note">
-                        Base estimate minus user-entered repair cost.
-                        This is a simplified adjustment, not a market appraisal.
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    else:
-
-        st.info(
-            "Complete a vehicle damage inspection to generate "
-            "the full condition report."
-        )
+    exterior_cost = st.number_input(
+        "Estimated exterior repair cost (₹)",
+        min_value=0.0,
+        step=500.0,
+        key="exterior_repair_cost_input"
+    )
 
     st.caption(
-        "CarWise AI identifies visible damage only. It cannot assess "
-        "hidden structural damage, engine health, mechanical condition "
-        "or accident history. Repair costs are entered separately."
+        "This is a suggested estimate based on detected damage. "
+        "Edit it to reflect actual repair quotations."
     )
+
+    st.divider()
+
+    st.markdown("#### Mechanical Component Assessment")
+
+    condition_options = ["Good", "Average", "Poor"]
+
+    condition_ratings = {}
+
+    for component in ["Engine", "Transmission", "Brakes", "Tyres"]:
+
+        condition_ratings[component] = st.selectbox(
+            f"{component} condition",
+            condition_options,
+            key=f"condition_{component}"
+        )
+
+    mechanical_deduction, mechanical_breakdown = (
+        calculate_mechanical_deduction(
+            st.session_state.base_price,
+            condition_ratings
+        )
+    )
+
+    st.markdown("#### Estimated Mechanical Adjustments")
+
+    for component, details in mechanical_breakdown.items():
+
+        st.write(
+            f"**{component}:** {details['condition']} — "
+            f"{details['percentage']:.1f}% adjustment "
+            f"(₹{details['deduction']:,.0f})"
+        )
+
+    st.metric(
+        "Total estimated mechanical adjustment",
+        f"₹{mechanical_deduction:,.0f}"
+    )
+
+    st.session_state.condition_ratings = condition_ratings
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("← Back", use_container_width=True):
+            st.session_state.workflow_step = 2
+            st.session_state.scroll_to_top = True
+            st.rerun()
+
+    with col2:
+        if st.button(
+            "Generate Final Valuation →",
+            use_container_width=True
+        ):
+            st.session_state.workflow_step = 4
+            st.session_state.scroll_to_top = True
+            st.rerun()
+
+
+# =================================================
+# STEP 4: FINAL VALUATION
+# =================================================
+
+elif step == 4:
+
+    st.markdown("### 📊 Step 4: Final Vehicle Valuation")
+
+    base_price = float(st.session_state.base_price)
+
+    exterior_cost = float(
+        st.session_state.exterior_repair_cost_input
+    )
+
+    ratings = st.session_state.condition_ratings
+
+    damage_counts = {}
+
+    for result in st.session_state.damage_results:
+        for damage, count in result["damage_counts"].items():
+            damage_counts[damage] = (
+                damage_counts.get(damage, 0) + count
+            )
+
+    mechanical_deduction, mechanical_breakdown = (
+        calculate_mechanical_deduction(base_price, ratings)
+    )
+
+    total_deductions = exterior_cost + mechanical_deduction
+
+    final_price = max(0, base_price - total_deductions)
+
+    st.markdown(
+        f"""
+        <div class="price-card">
+            <div class="price-label">
+                FINAL INDICATIVE VEHICLE VALUATION
+            </div>
+            <div class="price-value">
+                ₹{final_price:,.0f}
+            </div>
+            <div class="price-note">
+                Calculated using the base AI estimate and condition adjustments.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown("#### Price Breakdown")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.metric("Base AI Price", f"₹{base_price:,.0f}")
+
+    with col2:
+        st.metric("Exterior Repair Estimate", f"₹{exterior_cost:,.0f}")
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        st.metric(
+            "Mechanical Adjustment",
+            f"₹{mechanical_deduction:,.0f}"
+        )
+
+    with col4:
+        st.metric(
+            "Total Deductions",
+            f"₹{total_deductions:,.0f}"
+        )
+
+    st.divider()
+
+    st.markdown("#### Vehicle Condition Report")
+
+    st.write("**Vehicle:**",
+             f"{st.session_state.car_details['Brand']} "
+             f"{st.session_state.car_details['model']}")
+
+    st.write("**Manufacturing year:**",
+             st.session_state.car_details["Year"])
+
+    st.write("**Kilometres driven:**",
+             f"{st.session_state.car_details['kmDriven']:,} km")
+
+    st.markdown("#### Exterior Inspection")
+
+    if damage_counts:
+        st.json(damage_counts)
+    else:
+        st.success("No visible exterior damage reported.")
+
+    st.markdown("#### Mechanical Assessment")
+
+    for component, details in mechanical_breakdown.items():
+
+        st.write(
+            f"**{component}:** {details['condition']} "
+            f"— estimated adjustment ₹{details['deduction']:,.0f}"
+        )
+
+    st.divider()
+
+    st.caption(
+        "This valuation is an indicative estimate based on historical "
+        "vehicle listing data, visual damage detections and user-reported "
+        "mechanical condition. It is not a professional inspection, "
+        "repair quotation or guaranteed market price."
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if st.button("← Edit Condition Details", use_container_width=True):
+            st.session_state.workflow_step = 3
+            st.session_state.scroll_to_top = True
+            st.rerun()
+
+    with col2:
+        if st.button("Start New Valuation", use_container_width=True):
+            st.session_state.workflow_step = 1
+            st.session_state.base_price = None
+            st.session_state.car_details = None
+            st.session_state.damage_results = []
+            st.session_state.damage_analysis_done = False
+            st.session_state.exterior_repair_cost_input = 0.0
+            st.session_state.condition_ratings = {}
+            st.rerun()
+
 
 
 # ------------------------------------------------
